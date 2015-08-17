@@ -1,0 +1,6 @@
+xgatt_battery 18
+xgatt_name 23
+xgatt_owner 26
+xgatt_receiver 29
+xgatt_scaninterval 32
+xgatt_scanwindow 35

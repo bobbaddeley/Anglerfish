@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<configuration>
+
+    <service uuid="1800" advertise="true">
+      <description>Generic Access Profile</description>
+      <characteristic uuid="2a00">
+        <properties read="true" const="true"/>
+        <value>Bike Lo Jack Receiver</value>
+      </characteristic>
+      <characteristic uuid="2a01">
+        <properties read="true" const="true" />
+        <value type="hex">0000</value>
+      </characteristic>
+    </service>
+
+    <service uuid="1802" advertise="true">
+      <description>Immediate Alert</description>
+      <characteristic uuid="2a06" id="xgatt_alert">
+        <properties write_no_response="true"/>
+        <value type="hex" length="1"></value>
+      </characteristic>
+    </service>
+	
+    <service uuid="180a" id="manufacturer" advertise="true">
+        <characteristic uuid="2a24">
+            <properties read="true" const="true" />
+            <value>WYZGYZ</value>
+        </characteristic>
+		<characteristic uuid="2a27">
+            <properties read="true" const="true" />
+            <value>1</value>
+        </characteristic>
+        <characteristic uuid="2a26">
+            <properties read="true" const="true" />
+            <value>0.1</value>
+        </characteristic>
+        <characteristic uuid="2a29">
+            <properties read="true" const="true" />
+            <value>WYZGYZ LLC</value>
+        </characteristic>
+    </service>
+
+    <service uuid="180f" advertise="true">
+       <description>Battery Service</description>
+       <include id="manufacturer" />
+      <characteristic uuid="e101" id="xgatt_battery">
+			<description>Battery %</description>
+          <properties read="true" notify="true" />
+          <value type="hex" length="3"></value>
+      </characteristic>
+    </service>
+	
+    <service type="primary"  uuid="beb54859-b4b6-4aff-bc7f-a12e8a3cd859" advertise="true">
+        <description>Bike Lo Jack Receiver</description>
+        <characteristic uuid="ba631b8e-cc6f-4a78-b15a-8f6377fefe1a" id="xgatt_name">
+			<description>Name</description>
+            <properties read="true" write_no_response="true"/>
+            <value length="16"></value>
+        </characteristic>
+        <characteristic uuid="d498646a-72f2-48fd-9032-8ea1dd55a63a" id="xgatt_owner">
+			<description>Owner</description>
+            <properties read="true" write_no_response="true"/>
+            <value length="16"></value>
+        </characteristic>
+		<characteristic uuid="80c6cf80-91f6-406f-91be-507f1d88988d" id="xgatt_pattern">
+			<description>RGBS(1/8S)</description>
+            <properties read="true" write_no_response="true"/>
+            <value length="4"></value>
+        </characteristic>
+		<characteristic uuid="80c6cf80-91f6-406f-91be-507f1d88988e" id="xgatt_blip_pattern">
+			<description>Blip Pattern</description>
+            <properties read="true" write_no_response="true"/>
+            <value length="1"></value>
+        </characteristic>
+		<characteristic uuid="80c6cf80-91f6-406f-91be-507f1d88988f" id="xgatt_blip_rate">
+			<description>Blip Rate (1/8S)</description>
+            <properties read="true" write_no_response="true"/>
+            <value length="1"></value>
+        </characteristic>
+    </service>
+</configuration>

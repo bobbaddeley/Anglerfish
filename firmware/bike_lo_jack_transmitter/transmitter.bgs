@@ -1,0 +1,240 @@
+const STATE_STANDBY = 0
+const STATE_SCANNING = 1
+const STATE_CONNECTING = 2
+const STATE_CONFIG_MODE = 3
+const STATE_CONTROL_READY = 4
+
+#handle of the remote alert characteristic
+const ALERT_HANDLE = 8
+
+dim app_state                       # keep track of application state
+dim intended_receiver_state
+dim pending_connection_handle       # handle for pending connection attempt
+dim connection_handle
+
+dim i
+dim j
+dim k
+dim led_state
+dim ret_result
+dim len
+dim remote_receiver(6)
+
+event system_boot(major ,minor ,patch ,build ,ll_version ,protocol_version ,hw )
+	remote_receiver(0:6) = "\x3E\xEB\x2D\x80\x07\x00"
+	intended_receiver_state = 0
+	call hardware_io_port_config_direction(0, $3)
+	call hardware_io_port_config_direction(1, $0)
+	call hardware_io_port_config_direction(2, $0)
+	
+	call flash_ps_load($8002)(ret_result, len, remote_receiver(0:6))
+	
+	#Set the LEDs to OFF
+	led_state = 0
+	call hardware_io_port_write(0, 3, led_state)
+	# Enable IO interrupts from PORT 0 on rising edge. These are the buttons
+	#0b00011100
+	call hardware_io_port_config_irq(1,$1C,1)
+	
+	# initialize all status/tracking vars
+    app_state = STATE_STANDBY
+    pending_connection_handle = $ff
+	connection_handle = 0
+
+    # set scan parameters to 125ms/125ms interval/window, and use passive scanning
+    call gap_set_scan_parameters($640, $640, 0)
+	
+	call gap_set_adv_parameters($32, $32, 7)
+	call attributes_write(xgatt_receiver, 0, 6, remote_receiver(0:6))
+end
+
+
+# catch scan response event while scanning
+event gap_scan_response(rssi, packet_type, sender, address_type, bond, data_len, data_data)
+    # only check for main ad packets (packet_type = 0)
+    if packet_type = 0 then
+        # NOTE: LITTLE-ENDIAN BYTE ORDER
+        i = 0
+        while i < 6
+			if remote_receiver(i:1) != sender(i:1)
+				return
+			end if
+			i = i + 1
+		end while
+		# found GPIO remote service, so connect (stops scanning automatically)
+		led_state = 2
+		call hardware_io_port_write(0, 3, led_state)
+		call gap_connect_direct(sender(0:6), address_type, 1500, 1600, 500, 0)(ret_result, k)
+		pending_connection_handle = k
+
+		# update application state
+		app_state = STATE_CONNECTING
+		# start 6-second one-shot timer to detect connection timeout
+		call hardware_set_soft_timer(32768*6, 0, 1)
+    end if
+end
+
+
+# catch connection update event
+event connection_status(connection, flags, address, address_type, conn_interval, timeout, latency, bonding)
+    # check for "new connection established" update
+    if (flags & $05) = $05 then
+		# make sure this is the first "connection_update" event
+        # (may be triggered again for other updates, encryption, etc.)
+        if app_state = STATE_CONNECTING then
+            # cancel connection timeout timer
+            call hardware_set_soft_timer(0, 0, 1)
+            pending_connection_handle = $ff
+		connection_handle = connection
+            # update application state
+		led_state = 3
+		call hardware_io_port_write(0, 3, led_state)
+		#turn the device on
+		intended_receiver_state = 3
+		call attclient_write_command(0, ALERT_HANDLE, 1, intended_receiver_state)
+        	app_state = STATE_CONTROL_READY
+        end if
+    end if
+end
+
+# catch disconnection event
+event connection_disconnected(handle, result)
+	#let the user know the device isn't connected anymore.
+	#require a button press to search again
+	led_state = 0
+	call hardware_io_port_write(0, 3, led_state)
+	app_state = STATE_STANDBY
+	connection_handle = 0
+end
+
+# catch timer tick (used to update the slave and detect connection attempt timeouts)
+event hardware_soft_timer(handle)
+	if app_state = STATE_CONFIG_MODE then
+		if (led_state = 1) then
+			led_state = 2
+		else
+			led_state = 1
+		end if
+		call hardware_io_port_write(0,3,led_state)
+		return
+	end if
+    if app_state = STATE_CONNECTING && pending_connection_handle != $ff then
+        # end connection attempt (1st line required, 2nd line failsafe)
+        call gap_end_procedure()
+        call connection_disconnect(connection_handle)
+        connection_handle = 0
+        # restart discovery
+		led_state = 1
+		call hardware_io_port_write(0, 3, led_state)
+        app_state = STATE_SCANNING
+        call gap_discover(gap_discover_generic)
+    end if
+	if app_state = STATE_CONTROL_READY then
+		led_state = 3
+		call hardware_io_port_write(0, 3, led_state)
+	end if
+	if app_state = STATE_STANDBY then
+			led_state = 0
+			call hardware_io_port_write(0, 3, led_state)
+			#disconnect
+			call connection_disconnect(connection_handle)
+			call dfu_reset(0)
+	end if
+end
+
+# HW interrupt listener
+#this will debounce the switch to make sure that it's only pressed once
+event hardware_io_port_status(delta, port, irq, state)
+    if app_state = STATE_CONTROL_READY && port = 1 then
+		call hardware_io_port_write(0,3,0)		
+		if (irq & 4) = 4 then
+			intended_receiver_state = 3
+			call attclient_write_command(0, ALERT_HANDLE, 1, intended_receiver_state)
+			call hardware_set_soft_timer(4096, 0 ,1)
+			return
+		end if
+		if (irq & 8) = 8 then
+			#if (intended_receiver_state = 1) then
+			#	intended_receiver_state = 2
+			#else
+			#	intended_receiver_state = 1
+			#end if
+			#turn off the flashing
+			intended_receiver_state = 0
+			call attclient_write_command(0, ALERT_HANDLE, 1, intended_receiver_state)
+			call hardware_set_soft_timer(4096, 0 ,1)
+			return
+		end if
+		if (irq & $10) = $10 then
+			#disconnect receiver
+			led_state = 0
+			call hardware_io_port_write(0, 3, led_state)
+			call connection_disconnect(connection_handle)
+			call dfu_reset(0)
+			#intended_receiver_state = 0
+			#call attclient_write_command(0, ALERT_HANDLE, 1, intended_receiver_state)
+			#app_state = STATE_STANDBY
+			#call hardware_set_soft_timer(32768*5,0,1)
+			return
+		end if
+    end if
+	if app_state = STATE_SCANNING && port = 1 then
+		if (irq & $10) = $10 then
+			app_state = STATE_STANDBY
+			call gap_end_procedure()
+			connection_handle = 0
+			# restart discovery
+			led_state = 0
+			call hardware_io_port_write(0, 3, led_state)
+			return
+		end if
+	end if
+	if app_state = STATE_STANDBY && port = 1 then
+		if (irq & $10) = $10 then
+			app_state = STATE_CONFIG_MODE
+			call gap_set_mode(gap_general_discoverable,gap_undirected_connectable)
+			call hardware_set_soft_timer(16000, 0 ,0)
+			return
+		end if
+		#if either button 2 or 3 is on but 1 is off, then wake up
+		if (irq & 4) = 4  || (irq & 8) = 8 then
+			app_state = STATE_SCANNING
+			led_state = 1
+			call hardware_io_port_write(0, 3, led_state)
+			call gap_discover(gap_discover_generic)
+			return
+		end if
+	end if
+	if app_state = STATE_CONFIG_MODE && port = 1 then
+		if (irq & 4) = 4 || (irq & 8) = 8 || (irq & $10) = $10 then
+			call gap_end_procedure()
+			call hardware_io_port_write(0,3,0)
+			call dfu_reset(0)
+			return
+		end if
+	end if
+end
+
+
+# Check if remote device writes a value to the GATT and write it to a PS key
+# Catch an attribute write
+event attributes_value(connection, reason, handle, offset2, value_len, value_data)
+	if (handle= xgatt_name) then
+		#call flash_ps_erase($8000)
+		call flash_ps_save($8000, value_len, value_data(0:value_len))
+		call flash_ps_save($8010, 1,value_len)
+		return
+	end if
+	if (handle= xgatt_owner) then
+		#call flash_ps_erase($8001)
+		call flash_ps_save($8001, value_len, value_data(0:value_len))
+		call flash_ps_save($8011, 1,value_len)
+		return
+	end if
+	if (handle= xgatt_receiver) then
+		#call flash_ps_erase($8002)
+		call flash_ps_save($8002, value_len, value_data(0:value_len))
+		remote_receiver(0:6) = value_data(0:value_len)
+		return
+	end if
+end

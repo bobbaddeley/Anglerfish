@@ -1,0 +1,7 @@
+xgatt_alert 8
+xgatt_battery 21
+xgatt_name 26
+xgatt_owner 29
+xgatt_pattern 32
+xgatt_blip_pattern 35
+xgatt_blip_rate 38

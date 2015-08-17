@@ -1,0 +1,154 @@
+dim tmp(10)
+dim len
+dim len1
+dim len2
+dim len3
+dim level
+dim oncount
+dim pattern(4)
+dim patternbit
+dim blip_pattern
+dim blip_rate
+dim result2
+dim name(32)
+dim owner(32)
+# Boot Event listener
+event system_boot(major,minor,patch,build,ll_version,protocol,hw)
+	call gap_set_adv_parameters(6400, 6400, 7)
+    call gap_set_mode(gap_general_discoverable,gap_undirected_connectable)
+	#Allow pairing
+	call sm_set_bondable_mode(1)
+	call hardware_io_port_config_direction(0,60)
+	call hardware_io_port_config_direction(2,$0)
+	call hardware_io_port_write(0,60,0)
+	pattern(0:1) = $0F
+	pattern(1:1) = $33
+	pattern(2:1) = $55
+	pattern(3:1) = $80
+	oncount = 0
+	
+	call flash_ps_load($8010)(result2, len, len1)
+	call flash_ps_load($8000)(result2, len, name(0:len1))
+	call flash_ps_load($8011)(result2, len, len2)
+	call flash_ps_load($8001)(result2, len, owner(0:len2))
+	call flash_ps_load($8002)(result2, len, pattern(0:4))
+	call flash_ps_load($8003)(result2, len, blip_pattern)
+	call flash_ps_load($8004)(result2, len, blip_rate)
+	
+	if (blip_pattern = 0) then
+		blip_pattern = 56
+	end if
+	if (blip_rate = 0) then
+		blip_rate = 32
+	end if
+	
+	call attributes_write(xgatt_name, 0, len1, name(0:len1))
+	call attributes_write(xgatt_owner, 0, len2, owner(0:len2))
+	call attributes_write(xgatt_pattern, 0, 4, pattern(0:4))
+	call attributes_write(xgatt_blip_pattern, 0, 1, blip_pattern)
+	call attributes_write(xgatt_blip_rate, 0, 1, blip_rate)
+end
+
+event hardware_soft_timer(handle)
+	oncount = oncount + 1
+    if (level=1 && (oncount=blip_rate)) then
+		call hardware_io_port_write(0,60,blip_pattern)
+		return
+	end if
+    if (level=1 && (oncount>blip_rate + 1)) then
+		oncount = 0
+		call hardware_io_port_write(0,60,0)
+		return
+	end if
+	if level=3 then
+		if (pattern(3:1)>>patternbit & 1) then
+			call hardware_io_port_write(0,4,4)
+		else
+			call hardware_io_port_write(0,4,0)
+		end if
+	end if
+	if (level=2 || level=3) then
+		if (pattern(0:1)>>patternbit & 1) then
+			call hardware_io_port_write(0,8,8)
+		else
+			call hardware_io_port_write(0,8,0)
+		end if
+		if (pattern(1:1)>>patternbit & 1) then
+			call hardware_io_port_write(0,16,16)
+		else
+			call hardware_io_port_write(0,16,0)
+		end if
+		if (pattern(2:1)>>patternbit & 1) then
+			call hardware_io_port_write(0,32,32)
+		else
+			call hardware_io_port_write(0,32,0)
+		end if
+		
+		patternbit = patternbit + 1
+		if (patternbit = 8) then
+			patternbit = 0
+		end if
+	end if
+end
+
+# Disconnection event listener
+event connection_disconnected(handle,result)
+    call gap_set_mode(gap_general_discoverable,gap_undirected_connectable)
+end
+
+# Check if remote device writes a value to the GATT and write it to a PS key
+# Catch an attribute write
+event attributes_value(connection, reason, handle, offset2, value_len, value_data)
+	if (handle=xgatt_alert) then
+		# Check the alert level
+		level=value_data(0:1)
+		if level=0 then
+			call hardware_io_port_write(0,60,0)
+			call hardware_set_soft_timer(4096, 0 ,1)
+		end if
+		if level=1 then
+			oncount = 0
+			call hardware_io_port_write(0,60,0)
+			call hardware_set_soft_timer(4096, 0 ,0)
+		end if
+		if level=2 then
+			call hardware_io_port_write(0,60,16)
+			call hardware_set_soft_timer(4096, 0 ,0)
+		end if
+		if level=3 then
+			call hardware_io_port_write(0,60,8)
+			call hardware_set_soft_timer(4096, 0 ,0)
+		end if
+		return
+	end if
+	if (handle= xgatt_name) then
+		#call flash_ps_erase($8000)
+		call flash_ps_save($8000, value_len, value_data(0:value_len))
+		call flash_ps_save($8010, 1,value_len)
+		return
+	end if
+	if (handle= xgatt_owner) then
+		#call flash_ps_erase($8001)
+		call flash_ps_save($8001, value_len, value_data(0:value_len))
+		call flash_ps_save($8011, 1,value_len)
+		return
+	end if
+	if (handle= xgatt_pattern) then
+		#call flash_ps_erase($8002)
+		call flash_ps_save($8002, value_len, value_data(0:value_len))
+		pattern(0:4) = value_data(0:4)
+		return
+	end if
+	if (handle= xgatt_blip_pattern) then
+		#call flash_ps_erase($8003)
+		call flash_ps_save($8003, value_len, value_data(0:1))
+		blip_pattern = value_data(0:1)
+		return
+	end if
+	if (handle= xgatt_blip_rate) then
+		#call flash_ps_erase($8004)
+		call flash_ps_save($8004, value_len, value_data(0:1))
+		blip_rate = value_data(0:1)
+		return
+	end if
+end
